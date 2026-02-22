@@ -47,9 +47,6 @@ MAX_PAGES = {
     "suggest": 1,
 }
 
-# 早期打ち切りしきい値
-MIN_RESULTS_THRESHOLD = 4
-
 # グローバルHTTPXクライアント (HTTP/2有効, コネクションプール共有)
 global_client: Optional[httpx.AsyncClient] = None
 
@@ -216,56 +213,47 @@ async def get_valid_proxy_url(original_url: str) -> str:
     return result_url
 
 # ==========================================
-# **SearXNG並列検索 (早期打ち切り対応)**
+# **SearXNG単一ページ検索**
 # ==========================================
-async def fetch_searxng_parallel(
+async def fetch_searxng_single_page(
     q: str, 
-    pages: int, 
+    page: int, 
     category: str, 
     result_parser, 
     extra_processing=None, 
     safesearch: int = 0,
     lang: str = "ja"
 ):
-    """SearXNG並列検索 (HTTP/2, 多言語対応, 早期打ち切り)"""
-    all_results = []
+    """SearXNG単一ページ検索 (HTTP/2, 多言語対応)"""
+    params = {
+        "q": q,
+        "categories": category,
+        "format": "json",
+        "pageno": page,
+        "safesearch": safesearch,
+        "language": lang
+    }
     
-    for page_num in range(1, pages + 1):
-        params = {
-            "q": q,
-            "categories": category,
-            "format": "json",
-            "pageno": page_num,
-            "safesearch": safesearch,
-            "language": lang
-        }
+    try:
+        resp = await global_client.get(SEARXNG_URL, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        parsed_items = result_parser(results, page)
         
-        try:
-            resp = await global_client.get(SEARXNG_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-            results = data.get("results", [])
-            parsed_items = result_parser(results, page_num)
+        # extra_processingがあり、複数件ある場合のみ並列化
+        if extra_processing and len(parsed_items) > 1:
+            parsed_items = await asyncio.gather(
+                *[extra_processing(item) for item in parsed_items]
+            )
+        elif extra_processing and len(parsed_items) == 1:
+            parsed_items[0] = await extra_processing(parsed_items[0])
+        
+        return parsed_items
             
-            # extra_processingがあり、複数件ある場合のみ並列化
-            if extra_processing and len(parsed_items) > 1:
-                parsed_items = await asyncio.gather(
-                    *[extra_processing(item) for item in parsed_items]
-                )
-            elif extra_processing and len(parsed_items) == 1:
-                parsed_items[0] = await extra_processing(parsed_items[0])
-            
-            all_results.extend(parsed_items)
-            
-            # 早期打ち切り: 結果が少ない場合は次ページをスキップ
-            if len(parsed_items) < MIN_RESULTS_THRESHOLD:
-                break
-                
-        except Exception as e:
-            print(f"SearXNG {category} Error Page {page_num}: {e}")
-            break  # エラー時も打ち切り
-    
-    return all_results
+    except Exception as e:
+        print(f"SearXNG {category} Error Page {page}: {e}")
+        return []
 
 # ==========================================
 # **Google Suggest**
@@ -286,7 +274,7 @@ async def fetch_suggest(q: str):
 # ==========================================
 # **Web/News/Images/Video**
 # ==========================================
-async def fetch_web_searxng(q: str, pages: int, safesearch: int = 0, lang: str = "ja"):
+async def fetch_web_searxng(q: str, page: int, safesearch: int = 0, lang: str = "ja"):
     """Web検索"""
     def parser(results, p):
         items = []
@@ -303,9 +291,9 @@ async def fetch_web_searxng(q: str, pages: int, safesearch: int = 0, lang: str =
             })
         return items
     
-    return await fetch_searxng_parallel(q, pages, "general", parser, safesearch=safesearch, lang=lang)
+    return await fetch_searxng_single_page(q, page, "general", parser, safesearch=safesearch, lang=lang)
 
-async def fetch_news_searxng(q: str, pages: int, safesearch: int = 0, lang: str = "ja"):
+async def fetch_news_searxng(q: str, page: int, safesearch: int = 0, lang: str = "ja"):
     """ニュース検索"""
     def parser(results, p):
         return [{
@@ -317,9 +305,9 @@ async def fetch_news_searxng(q: str, pages: int, safesearch: int = 0, lang: str 
             "page": p
         } for i in results if i.get("title") and i.get("url")]
     
-    return await fetch_searxng_parallel(q, pages, "news", parser, safesearch=safesearch, lang=lang)
+    return await fetch_searxng_single_page(q, page, "news", parser, safesearch=safesearch, lang=lang)
 
-async def fetch_images_searxng(q: str, pages: int, safesearch: int = 0, lang: str = "ja"):
+async def fetch_images_searxng(q: str, page: int, safesearch: int = 0, lang: str = "ja"):
     """画像検索 (プロキシキャッシュ付き)"""
     def parser(results, p):
         return [{
@@ -335,9 +323,9 @@ async def fetch_images_searxng(q: str, pages: int, safesearch: int = 0, lang: st
         item["thumbnail"] = await get_valid_proxy_url(raw) if raw else ""
         return item
     
-    return await fetch_searxng_parallel(q, pages, "images", parser, processor, safesearch, lang)
+    return await fetch_searxng_single_page(q, page, "images", parser, processor, safesearch, lang)
 
-async def fetch_video_searxng(q: str, pages: int, safesearch: int = 0, lang: str = "ja"):
+async def fetch_video_searxng(q: str, page: int, safesearch: int = 0, lang: str = "ja"):
     """動画検索 (プロキシキャッシュ付き)"""
     def parser(results, p):
         return [{
@@ -354,12 +342,12 @@ async def fetch_video_searxng(q: str, pages: int, safesearch: int = 0, lang: str
         item["thumbnail"] = await get_valid_proxy_url(raw) if raw else ""
         return item
     
-    return await fetch_searxng_parallel(q, pages, "videos", parser, processor, safesearch, lang)
+    return await fetch_searxng_single_page(q, page, "videos", parser, processor, safesearch, lang)
 
 # ==========================================
 # **Wikipedia Panel検索 (並列化)**
 # ==========================================
-async def fetch_panel_searxng(q: str, pages: int = 1, safesearch: int = 0, lang: str = "ja"):
+async def fetch_panel_searxng(q: str, safesearch: int = 0, lang: str = "ja"):
     """Wikipedia Panel検索 (候補並列取得)"""
     params = {
         "q": q,
@@ -418,12 +406,12 @@ async def fetch_panel_searxng(q: str, pages: int = 1, safesearch: int = 0, lang:
 # ==========================================
 # **検索実行・キャッシュ**
 # ==========================================
-async def exec_search_and_cache(q: str, pages: int, type: str, safesearch: int = 0, lang: str = "ja"):
+async def exec_search_and_cache(q: str, page: int, type: str, safesearch: int = 0, lang: str = "ja"):
     # タイプ別最大ページ数を適用
-    max_pages = MAX_PAGES.get(type, 5)
-    pages = min(pages, max_pages)
+    max_page = MAX_PAGES.get(type, 5)
+    page = min(page, max_page)
     
-    cache_key = f"search:{type}:{q}:{pages}:s{safesearch}:l{lang}"
+    cache_key = f"search:{type}:{q}:p{page}:s{safesearch}:l{lang}"
     
     # Redisキャッシュ確認 (getのみ)
     try:
@@ -436,15 +424,15 @@ async def exec_search_and_cache(q: str, pages: int, type: str, safesearch: int =
     raw_results = []
     try:
         if type == "image":
-            raw_results = await fetch_images_searxng(q, pages, safesearch, lang)
+            raw_results = await fetch_images_searxng(q, page, safesearch, lang)
         elif type == "video":
-            raw_results = await fetch_video_searxng(q, pages, safesearch, lang)
+            raw_results = await fetch_video_searxng(q, page, safesearch, lang)
         elif type == "news":
-            raw_results = await fetch_news_searxng(q, pages, safesearch, lang)
+            raw_results = await fetch_news_searxng(q, page, safesearch, lang)
         elif type == "web":
-            raw_results = await fetch_web_searxng(q, pages, safesearch, lang)
+            raw_results = await fetch_web_searxng(q, page, safesearch, lang)
         elif type == "panel":
-            raw_results = await fetch_panel_searxng(q, pages, safesearch, lang)
+            raw_results = await fetch_panel_searxng(q, safesearch, lang)
         elif type == "suggest":
             raw_results = await fetch_suggest(q)
     except Exception as e:
@@ -463,6 +451,7 @@ async def exec_search_and_cache(q: str, pages: int, type: str, safesearch: int =
             resp = {
                 "query": q,
                 "type": type,
+                "page": page,
                 "source": "live",
                 "count": len(unique_results),
                 "results": unique_results
@@ -486,22 +475,22 @@ async def exec_search_and_cache(q: str, pages: int, type: str, safesearch: int =
 async def search_endpoint(
     background_tasks: BackgroundTasks,
     q: str = Query(..., description="検索ワード"),
-    pages: int = Query(1, ge=1, le=10, description="ページ数 (タイプ別に上限あり)"),
+    page: int = Query(1, ge=1, le=10, description="ページ番号 (タイプ別に上限あり)"),
     type: Literal["web", "image", "suggest", "video", "news", "panel"] = Query("web"),
     safesearch: int = Query(0, ge=0, le=2, description="セーフサーチ: 0=無効, 1=中程度, 2=厳格"),
     lang: str = Query("ja", regex="^(ja|en)$", description="言語: ja=日本語, en=英語")
 ):
-    result = await exec_search_and_cache(q, pages, type, safesearch, lang)
+    result = await exec_search_and_cache(q, page, type, safesearch, lang)
     
     if result is None:
-        return {"query": q, "type": type, "count": 0, "results": [], "error": "Search failed"}
+        return {"query": q, "type": type, "page": page, "count": 0, "results": [], "error": "Search failed"}
 
-    # バックグラウンドプリフェッチ (web検索時のみ)
-    if type == "web":
-        background_tasks.add_task(exec_search_and_cache, q, pages, "image", safesearch, lang)
-        background_tasks.add_task(exec_search_and_cache, q, pages, "video", safesearch, lang)
-        background_tasks.add_task(exec_search_and_cache, q, pages, "news", safesearch, lang)
-        background_tasks.add_task(exec_search_and_cache, q, pages, "panel", safesearch, lang)
+    # バックグラウンドプリフェッチ (web検索時のみ, 1ページ目のみ)
+    if type == "web" and page == 1:
+        background_tasks.add_task(exec_search_and_cache, q, 1, "image", safesearch, lang)
+        background_tasks.add_task(exec_search_and_cache, q, 1, "video", safesearch, lang)
+        background_tasks.add_task(exec_search_and_cache, q, 1, "news", safesearch, lang)
+        background_tasks.add_task(exec_search_and_cache, q, 1, "panel", safesearch, lang)
 
     return result
 
