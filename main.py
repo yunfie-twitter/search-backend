@@ -14,7 +14,7 @@ except ImportError:
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GZIPMiddleware  # Starletteからimport
+from starlette.middleware.gzip import GZipMiddleware  # 正しいクラス名
 import httpx
 import redis.asyncio as redis
 import orjson
@@ -89,7 +89,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZIPMiddleware, minimum_size=500)  # gzip圧縮有効化
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # gzip圧縮有効化 (1KB以上)
 
 # ==========================================
 # **ユーティリティ関数**
