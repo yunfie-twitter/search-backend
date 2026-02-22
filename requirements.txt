@@ -1,7 +1,8 @@
 fastapi
-uvicorn
+uvicorn[standard]
 httpx[http2]
 beautifulsoup4
 playwright
 redis
 orjson
+uvloop
