@@ -14,7 +14,7 @@ except ImportError:
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZIPMiddleware
+from starlette.middleware.gzip import GZIPMiddleware  # Starletteからimport
 import httpx
 import redis.asyncio as redis
 import orjson
