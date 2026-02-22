@@ -129,27 +129,37 @@ async def fetch_wikipedia_panel(title: str) -> Optional[Dict]:
     """Wikipedia REST APIで詳細情報取得 (曖昧さ回避除外, 24hキャッシュ)"""
     cache_key = f"wiki:panel:{title}"
     
+    print(f"[DEBUG] Fetching Wikipedia panel for: {title}")
+    
     # Redisキャッシュ確認 (getのみ使用)
     try:
         cached = await rd.get(cache_key)
         if cached:
+            print(f"[DEBUG] Wikipedia panel cache HIT: {title}")
             return orjson.loads(cached)
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] Cache error: {e}")
         pass
     
     api_url = WIKIPEDIA_SUMMARY_API.format(title=urllib.parse.quote(title, safe=''))
+    print(f"[DEBUG] Wikipedia API URL: {api_url}")
     
     try:
         resp = await global_client.get(api_url, timeout=API_TIMEOUT)
+        print(f"[DEBUG] Wikipedia API status: {resp.status_code}")
+        
         if resp.status_code == 200:
             data = resp.json()
+            print(f"[DEBUG] Wikipedia data type: {data.get('type')}")
             
             # 曖昧さ回避判定
             if data.get("type") == "disambiguation":
+                print(f"[DEBUG] Rejected: disambiguation page (type)")
                 return None
             
             extract = data.get("extract", "")
             if "曖昧さ回避" in extract or "disambiguation" in extract.lower():
+                print(f"[DEBUG] Rejected: disambiguation in extract")
                 return None
             
             panel = {
@@ -164,14 +174,18 @@ async def fetch_wikipedia_panel(title: str) -> Optional[Dict]:
                 "api_url": api_url
             }
             
+            print(f"[DEBUG] Wikipedia panel created successfully: {data.get('title')}")
+            
             # 24h長期キャッシュ
             try:
                 await rd.setex(cache_key, CACHE_EXPIRE_LONG, orjson.dumps(panel))
-            except Exception:
+            except Exception as e:
+                print(f"[DEBUG] Cache save error: {e}")
                 pass
             
             return panel
-    except Exception:
+    except Exception as e:
+        print(f"[DEBUG] Wikipedia API error: {e}")
         pass
     
     return None
@@ -363,11 +377,15 @@ async def fetch_panel_searxng(q: str, safesearch: int = 0, lang: str = "ja"):
         "language": lang
     }
     
+    print(f"[DEBUG] Panel search for query: {q}")
+    
     try:
         resp = await global_client.get(SEARXNG_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])
+        
+        print(f"[DEBUG] SearXNG returned {len(results)} results for panel search")
         
         # Wikipedia記事を抽出
         wiki_candidates = []
@@ -382,8 +400,12 @@ async def fetch_panel_searxng(q: str, safesearch: int = 0, lang: str = "ja"):
                     "url": item.get("url"),
                     "wiki_title": wiki_title
                 })
+                print(f"[DEBUG] Found Wikipedia candidate: {wiki_title} ({item.get('url')})")
+        
+        print(f"[DEBUG] Total Wikipedia candidates: {len(wiki_candidates)}")
         
         if not wiki_candidates:
+            print(f"[DEBUG] No Wikipedia candidates found")
             return {"query": q, "type": "panel", "wiki_found": False}
         
         # 並列でWikipedia Panel取得 (最初の有効なものを採用)
@@ -394,6 +416,7 @@ async def fetch_panel_searxng(q: str, safesearch: int = 0, lang: str = "ja"):
             if panel:  # 曖昧さ回避でなければ採用
                 candidate["wikipedia_panel"] = panel
                 candidate["wiki_priority"] = True
+                print(f"[DEBUG] Panel found successfully: {candidate['wiki_title']}")
                 return {
                     "query": q,
                     "type": "panel",
@@ -402,10 +425,11 @@ async def fetch_panel_searxng(q: str, safesearch: int = 0, lang: str = "ja"):
                     "featured_panel": candidate
                 }
         
+        print(f"[DEBUG] All Wikipedia candidates were disambiguation pages")
         return {"query": q, "type": "panel", "wiki_found": False}
         
     except Exception as e:
-        print(f"Panel search error: {e}")
+        print(f"[ERROR] Panel search error: {e}")
         return {"query": q, "type": "panel", "wiki_found": False}
 
 # ==========================================
