@@ -27,6 +27,9 @@ SEARXNG_URL = "https://search.p2pear.asia/search"
 MISSKEY_API_URL = "https://pjsekai.world/api/notes/search"
 WIKIPEDIA_SUMMARY_API = "https://ja.wikipedia.org/api/rest_v1/page/summary/{title}"
 
+# User-Agent
+USER_AGENT = "Wholphin Search/1.0 (https://github.com/yunfie-twitter/search-backend; contact@wholphin.net) httpx/0.27.0"
+
 # Timeout設定(短縮)
 API_TIMEOUT = httpx.Timeout(3.0, connect=2.0)
 SEARXNG_TIMEOUT = httpx.Timeout(5.0, connect=2.0)
@@ -70,7 +73,8 @@ async def lifespan(app: FastAPI):
         limits=limits,
         timeout=SEARXNG_TIMEOUT,
         http2=True,  # HTTP/2有効化
-        follow_redirects=True
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT}  # デフォルトUser-Agent設定
     )
     
     rd = redis.from_url(
