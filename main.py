@@ -14,7 +14,7 @@ except ImportError:
 
 from fastapi import FastAPI, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GZipMiddleware  # 正しいクラス名
+from starlette.middleware.gzip import GZipMiddleware
 import httpx
 import redis.asyncio as redis
 import orjson
@@ -36,6 +36,19 @@ PROXY_TIMEOUT = httpx.Timeout(1.0, connect=0.5)
 CACHE_EXPIRE_SHORT = 3600  # 1h (検索結果)
 CACHE_EXPIRE_LONG = 86400  # 24h (Wikipedia Panel)
 CACHE_EXPIRE_PROXY = 604800  # 7d (画像プロキシ検証)
+
+# タイプ別最大ページ数
+MAX_PAGES = {
+    "web": 10,
+    "news": 5,
+    "image": 3,
+    "video": 3,
+    "panel": 1,
+    "suggest": 1,
+}
+
+# 早期打ち切りしきい値
+MIN_RESULTS_THRESHOLD = 5
 
 # グローバルHTTPXクライアント (HTTP/2有効, コネクションプール共有)
 global_client: Optional[httpx.AsyncClient] = None
@@ -207,7 +220,7 @@ async def get_valid_proxy_url(original_url: str) -> str:
     return result_url
 
 # ==========================================
-# **SearXNG並列検索**
+# **SearXNG並列検索 (早期打ち切り対応)**
 # ==========================================
 async def fetch_searxng_parallel(
     q: str, 
@@ -218,16 +231,19 @@ async def fetch_searxng_parallel(
     safesearch: int = 0,
     lang: str = "ja"
 ):
-    """SearXNG並列検索 (HTTP/2, 多言語対応)"""
-    async def fetch_page(page_num: int):
+    """SearXNG並列検索 (HTTP/2, 多言語対応, 早期打ち切り)"""
+    all_results = []
+    
+    for page_num in range(1, pages + 1):
         params = {
             "q": q,
             "categories": category,
             "format": "json",
             "pageno": page_num,
             "safesearch": safesearch,
-            "language": lang  # 言語パラメータ
+            "language": lang
         }
+        
         try:
             resp = await global_client.get(SEARXNG_URL, params=params)
             resp.raise_for_status()
@@ -243,14 +259,17 @@ async def fetch_searxng_parallel(
             elif extra_processing and len(parsed_items) == 1:
                 parsed_items[0] = await extra_processing(parsed_items[0])
             
-            return parsed_items
+            all_results.extend(parsed_items)
+            
+            # 早期打ち切り: 結果が少ない場合は次ページをスキップ
+            if len(parsed_items) < MIN_RESULTS_THRESHOLD:
+                break
+                
         except Exception as e:
             print(f"SearXNG {category} Error Page {page_num}: {e}")
-            return []
+            break  # エラー時も打ち切り
     
-    tasks = [fetch_page(i + 1) for i in range(pages)]
-    pages_results = await asyncio.gather(*tasks)
-    return [item for page_result in pages_results for item in page_result]
+    return all_results
 
 # ==========================================
 # **Google Suggest**
@@ -406,6 +425,10 @@ async def fetch_panel_searxng(q: str, pages: int = 1, safesearch: int = 0, lang:
 # **検索実行・キャッシュ**
 # ==========================================
 async def exec_search_and_cache(q: str, pages: int, type: str, safesearch: int = 0, lang: str = "ja"):
+    # タイプ別最大ページ数を適用
+    max_pages = MAX_PAGES.get(type, 5)
+    pages = min(pages, max_pages)
+    
     cache_key = f"search:{type}:{q}:{pages}:s{safesearch}:l{lang}"
     
     # Redisキャッシュ確認 (getのみ)
@@ -469,7 +492,7 @@ async def exec_search_and_cache(q: str, pages: int, type: str, safesearch: int =
 async def search_endpoint(
     background_tasks: BackgroundTasks,
     q: str = Query(..., description="検索ワード"),
-    pages: int = Query(1, ge=1, le=5),
+    pages: int = Query(1, ge=1, le=10, description="ページ数 (タイプ別に上限あり)"),
     type: Literal["web", "image", "suggest", "video", "news", "panel"] = Query("web"),
     safesearch: int = Query(0, ge=0, le=2, description="セーフサーチ: 0=無効, 1=中程度, 2=厳格"),
     lang: str = Query("ja", regex="^(ja|en)$", description="言語: ja=日本語, en=英語")
