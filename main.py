@@ -48,7 +48,7 @@ MAX_PAGES = {
 }
 
 # 早期打ち切りしきい値
-MIN_RESULTS_THRESHOLD = 5
+MIN_RESULTS_THRESHOLD = 4
 
 # グローバルHTTPXクライアント (HTTP/2有効, コネクションプール共有)
 global_client: Optional[httpx.AsyncClient] = None
