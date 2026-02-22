@@ -119,10 +119,6 @@ def extract_wiki_title(url: str) -> Optional[str]:
     title = urllib.parse.unquote(match.group(1))
     return title.replace('_', ' ')
 
-def is_wikipedia_url(url: str) -> bool:
-    """Wikipedia URL判定 (単純なin検索)"""
-    return "wikipedia.org" in url if url else False
-
 def get_favicon(url: str) -> Optional[str]:
     """Favicon URL生成 (遅延評価)"""
     if not url:
@@ -291,13 +287,11 @@ async def fetch_suggest(q: str):
 # **Web/News/Images/Video**
 # ==========================================
 async def fetch_web_searxng(q: str, pages: int, safesearch: int = 0, lang: str = "ja"):
-    """Web検索 (Wikipedia除外)"""
+    """Web検索"""
     def parser(results, p):
         items = []
         for i in results:
             if not (i.get("title") and i.get("url")):
-                continue
-            if is_wikipedia_url(i.get("url")):  # Wikipedia除外
                 continue
             
             items.append({
