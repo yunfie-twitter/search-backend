@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+httpx[http2]
+beautifulsoup4
+playwright
+redis
+orjson
