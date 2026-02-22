@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8060:8000"
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+    # Playwright用のIPCモード設定（メモリ共有関連のクラッシュ防止）
+    ipc: host
+
+  redis:
+    image: valkey/valkey:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
