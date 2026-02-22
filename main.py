@@ -487,11 +487,19 @@ async def exec_search_and_cache(q: str, page: int, type: str, safesearch: int = 
 async def search_endpoint(
     background_tasks: BackgroundTasks,
     q: str = Query(..., description="検索ワード"),
-    page: int = Query(1, ge=1, le=10, description="ページ番号 (タイプ別に上限あり)"),
+    page: Optional[int] = Query(None, ge=1, le=10, description="ページ番号 (タイプ別に上限あり)"),
+    pages: Optional[int] = Query(None, ge=1, le=10, description="[非推奨] 後方互換性のためのpageを使用"),
     type: Literal["web", "image", "suggest", "video", "news", "panel"] = Query("web"),
     safesearch: int = Query(0, ge=0, le=2, description="セーフサーチ: 0=無効, 1=中程度, 2=厳格"),
     lang: str = Query("ja", regex="^(ja|en)$", description="言語: ja=日本語, en=英語")
 ):
+    # pagesパラメータの後方互換性対応
+    if pages is not None and page is None:
+        page = pages
+        print(f"[WARN] 'pages' parameter is deprecated, use 'page' instead")
+    elif page is None:
+        page = 1
+    
     print(f"[DEBUG] Endpoint called: q={q}, page={page}, type={type}")
     result = await exec_search_and_cache(q, page, type, safesearch, lang)
     
