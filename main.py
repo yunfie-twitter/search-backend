@@ -234,12 +234,17 @@ async def fetch_searxng_single_page(
         "language": lang
     }
     
+    print(f"[DEBUG] SearXNG Request: q={q}, category={category}, pageno={page}")
+    
     try:
         resp = await global_client.get(SEARXNG_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])
+        print(f"[DEBUG] SearXNG Response: page={page}, results_count={len(results)}")
+        
         parsed_items = result_parser(results, page)
+        print(f"[DEBUG] Parsed items: page={page}, parsed_count={len(parsed_items)}")
         
         # extra_processingがあり、複数件ある場合のみ並列化
         if extra_processing and len(parsed_items) > 1:
@@ -412,13 +417,18 @@ async def exec_search_and_cache(q: str, page: int, type: str, safesearch: int = 
     page = min(page, max_page)
     
     cache_key = f"search:{type}:{q}:p{page}:s{safesearch}:l{lang}"
+    print(f"[DEBUG] Cache key: {cache_key}")
     
     # Redisキャッシュ確認 (getのみ)
     try:
         cached = await rd.get(cache_key)
         if cached:
+            print(f"[DEBUG] Cache HIT for page {page}")
             return orjson.loads(cached)
-    except Exception:
+        else:
+            print(f"[DEBUG] Cache MISS for page {page}")
+    except Exception as e:
+        print(f"[DEBUG] Cache error: {e}")
         pass
 
     raw_results = []
@@ -463,7 +473,9 @@ async def exec_search_and_cache(q: str, page: int, type: str, safesearch: int = 
     try:
         ttl = CACHE_EXPIRE_LONG if type == "panel" else CACHE_EXPIRE_SHORT
         await rd.setex(cache_key, ttl, orjson.dumps(resp))
-    except Exception:
+        print(f"[DEBUG] Cached results for page {page}")
+    except Exception as e:
+        print(f"[DEBUG] Cache save error: {e}")
         pass
 
     return resp
@@ -480,6 +492,7 @@ async def search_endpoint(
     safesearch: int = Query(0, ge=0, le=2, description="セーフサーチ: 0=無効, 1=中程度, 2=厳格"),
     lang: str = Query("ja", regex="^(ja|en)$", description="言語: ja=日本語, en=英語")
 ):
+    print(f"[DEBUG] Endpoint called: q={q}, page={page}, type={type}")
     result = await exec_search_and_cache(q, page, type, safesearch, lang)
     
     if result is None:
